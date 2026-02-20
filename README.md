@@ -14,12 +14,12 @@ source venv/bin/activate
 # 3 connect PiMoroni EnviroPiHat (it uses I2C)
 
 I2C Device ESP32 NodeMCU 32S
-SDA (default is GPIO 21)
-SCL (default is GPIO 22)
+- SDA (default is GPIO 21)
+- SCL (default is GPIO 22)
 
 PiMoroni EnviroPiHat pins are same as Raspberry PI 3 HAT connections
-SDA is GPIO2 (physical pin #3)
-SCL is GPIO3 (physical pin #5)
+- SDA is GPIO2 (physical pin #3)
+- SCL is GPIO3 (physical pin #5)
 
 Connect +3.3V, 5V and GND
 
