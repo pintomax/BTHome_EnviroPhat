@@ -1,0 +1,227 @@
+########
+# Compiled on Ubuntu 24 LTS
+#
+# Esphome 2026.1.5
+#
+# Massimiliano Pinto 2024
+#
+# massimiliano.pinto@gmail.com
+#
+# RAM:   [=         ]  10.7% (used 35048 bytes from 327680 bytes)
+# Flash: [===       ]  34.9% (used 640847 bytes from 1835008 bytes)
+#
+
+esphome:
+  name: enviroclient
+  # ESPHome 2026 + Arduino: avoid duplicate app_main (see keyboard fix)
+  platformio_options:
+    framework: arduino
+    build_flags:
+      - "-Wl,--allow-multiple-definition"
+  libraries:
+    - esp32_ble_tracker=h2zero/NimBLE-Arduino #latest version
+    - BTHome=https://github.com/Chreece/BTHomeV2-ESP32-example.git #latest version
+
+esp32:
+  board: nodemcu-32s
+  framework:
+    type: arduino
+
+deep_sleep:
+  run_duration: 30s
+  sleep_duration: 40s
+  id: deep_sleep_1
+
+# Enable logging
+logger:
+  level: DEBUG
+
+i2c:
+
+external_components:
+  - source: ./components
+    components: [ "ehBTHome"]
+    refresh: always
+
+##### Use external component(s)
+ehBTHome:
+  # 16 hex bytes as 32 chars string representation
+  id: bthome
+  passkey: 491a39b1d7cc1ab1fd0254cd097db93b
+  device_name: "ESP32-BT-E1"
+
+sensor:
+  - platform: template
+    name: "BTHome device free RAM"
+    entity_category: "diagnostic"
+    unit_of_measurement: 'KB'
+    internal: true
+    id: free_m
+    lambda: |-
+            return (heap_caps_get_free_size(MALLOC_CAP_DEFAULT)/1024);
+
+  - platform: bmp280_i2c
+    update_interval: 10s
+    temperature:
+      name: "BME280 Temperature"
+      id: t1
+      filters:
+        - lambda: |-
+            if (x == NAN) {
+               return NAN;
+            } else {
+               return x;
+            }
+    pressure:
+      name: "BME280 Pressure"
+      id: p1
+    address: "0x77"
+
+  - platform: tcs34725
+    update_interval: 5s
+    address: "0x29"
+    red_channel:
+      name: "TCS34725 Red Channel"
+      id: rc
+    green_channel:
+      name: "TCS34725 Green Channel"
+      id: gc
+    blue_channel:
+      name: "TCS34725 Blue Channel"
+      id: bc
+    clear_channel:
+      name: "TCS34725 Clear Channel"
+      id: cc
+    illuminance:
+      name: "TCS34725 Illuminance"
+      id: il1
+    color_temperature:
+      name: "TCS34725 Color Temperature"
+      id: t2
+      filters:
+        - lambda: |-
+            if (x == NAN || x < 0 || x > 10000) {
+               return 0;
+            } else {
+               return x;
+            }
+
+binary_sensor:
+  - platform: template
+    name: "I2c Bus connected"
+    icon: 'mdi:bluetooth'
+    entity_category: "diagnostic"
+    id: i2c_connected
+    lambda: |-
+       return id(connect_status) == 1;
+
+globals:
+   - id: connect_status
+     type: int
+     restore_value: no
+     initial_value: '0'
+
+   - id: sensors_enabled
+     type: int
+     restore_value: no
+     initial_value: '0'
+
+# Execute every x seconds/minutes etc
+interval:
+  - interval: 10seconds
+    then:
+      - lambda: |-
+          static uint64_t counter = 1;
+          uint8_t device_state = STATE_OFF;
+
+          ESP_LOGD("advertisement", "BLE start PHAT advertisement");
+
+          bthome->resetMeasurement();
+
+          bthome->start();
+
+          if (counter % 10 == 0) {
+                  device_state = STATE_ON;
+          }
+
+          // Temperature measurements - both use ID_TEMPERATURE_PRECISE (0x02)
+          // Multiple temperatures with same ID become temperature, temperature_2, etc. in Home Assistant
+          if (!isnan(id(t1).state)) {
+                bthome->addMeasurement(ID_TEMPERATURE_PRECISE, id(t1).state);
+          }
+          // Color temperature: use ID_COUNT4 (4 bytes, factor 1) to store Kelvin directly
+          // ID_COUNT4 supports signed 32-bit range, so 4874 K fits without scaling
+          if (!isnan(id(t2).state) && id(t2).state > 0 && id(t2).state < 100000) {
+                bthome->addMeasurement(ID_COUNT4, (uint64_t)(id(t2).state));
+          }
+
+          if (!isnan(id(p1).state) && id(p1).state < 0xFFFFFF) {
+                bthome->addMeasurement(ID_PRESSURE, id(p1).state);
+          }
+
+          if (!isnan(id(il1).state) && id(il1).state < 0xFFFFFF) {
+                bthome->addMeasurement(ID_ILLUMINANCE, id(il1).state);
+          }
+
+          // Counters
+
+          // Counter 8 bit
+          bthome->addMeasurement(ID_COUNT, ++counter);
+
+          // Counter 16 bit for Free Memory
+          bthome->addMeasurement(ID_COUNT2, id(free_m).state);
+
+          bthome->addMeasurement_state(STATE_CONNECTIVITY, STATE_ON);
+
+          // Debug log for color channels
+          ESP_LOGD("colors", "RC=%.2f GC=%.2f BC=%.2f CC=%.2f", 
+                   id(rc).state, id(gc).state, id(bc).state, id(cc).state);
+
+          // RGB channels use ID_HUMIDITY (will appear as humidity, humidity_2, humidity_3 in HA)
+          // Clear channel uses ID_MOISTURE (will appear as moisture in HA)
+          // Red channel
+          if (!isnan(id(rc).state) && id(rc).state < 255) {
+                bthome->addMeasurement(ID_HUMIDITY, id(rc).state);
+          }
+          // Green channel
+          if (!isnan(id(gc).state) && id(gc).state < 255) {
+                bthome->addMeasurement(ID_HUMIDITY, id(gc).state);
+          }
+          // Blue channel
+          if (!isnan(id(bc).state) && id(bc).state < 255) {
+                bthome->addMeasurement(ID_HUMIDITY, id(bc).state);
+          }
+          // Clear channel
+          if (!isnan(id(cc).state) && id(cc).state < 255) {
+                bthome->addMeasurement(ID_MOISTURE, id(cc).state);
+          }
+          ESP_LOGD("colors", "Color channels sent: RC=%d GC=%d BC=%d CC=%d",
+                   !isnan(id(rc).state) && id(rc).state < 255,
+                   !isnan(id(gc).state) && id(gc).state < 255,
+                   !isnan(id(bc).state) && id(bc).state < 255,
+                   !isnan(id(cc).state) && id(cc).state < 255);
+
+          //if (!isnan(id(dist_1).state))  {
+          //      bthome->addMeasurement(ID_DISTANCEM, id(dist_1).state);
+          //}
+
+          //String msg = "BLE Enviro PHAT";
+          //uint8_t *m = (uint8_t *)msg.c_str(); 
+          //bthome->addMeasurement(ID_TEXT, (uint8_t *)msg.c_str(), (unsigned int)msg.length());
+          //bthome->addMeasurement(ID_TEXT, m, (unsigned int)msg.length());
+
+          // Add TEXT
+          uint8_t msg[] = "Enviro";
+          bthome->addMeasurement(ID_TEXT, msg, sizeof(msg)-1);
+
+          //uint8_t raw[] = "1.0.1";
+          //bthome->addMeasurement(ID_RAW, raw, sizeof(raw)-1);
+
+          //bthome->addMeasurement(ID_VOLTAGE, id(vcc_v).state);
+          //bthome->addMeasurement(ID_VOLTAGE1, id(vcc_v).state);
+
+          bthome->sendPacket();
+
+          bthome->stop();
+
+          ESP_LOGD("advertisement", "BLE stop PHAT advertisement");
